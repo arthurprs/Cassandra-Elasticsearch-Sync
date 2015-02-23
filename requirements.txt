@@ -1,3 +1,4 @@
 cassandra-driver
 elasticsearch
 PyYAML
+futures # only for py2

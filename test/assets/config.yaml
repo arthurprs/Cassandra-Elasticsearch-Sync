@@ -1,0 +1,21 @@
+interval: 60 # interval in seconds
+id_field: id # name of the id field
+version_field: version # name of the version field
+docs_per_batch: 1000 # number of document per batch insert
+sync_fields: # list of fields that will also be syncronized
+  - "data_int"
+  - "data_float"
+  - "data_str"
+
+cassandra:
+  hosts:
+    - 127.0.0.1
+  keyspace: default_art
+  table: t_data
+  changes_table: c_data
+
+elasticsearch:
+  hosts:
+    - 127.0.0.1
+  index: i_data
+  type: document

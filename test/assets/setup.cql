@@ -1,4 +1,4 @@
-DROP KEYSPACE default_art;
+DROP KEYSPACE IF EXISTS default_art;
 
 CREATE KEYSPACE "default_art" WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor' : 1} ;
 

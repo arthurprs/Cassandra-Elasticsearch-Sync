@@ -37,9 +37,9 @@ class Merger(object):
         # init ES with a custom transport/encoder that serializes UUID instances
         self.es_session = Elasticsearch(config_d["elasticsearch"]["hosts"], ESTransportEx)
 
-        self._prepare_queries()
+        self._prepare_ca_queries()
 
-    def _prepare_queries(self):
+    def _prepare_ca_queries(self):
         fields = [self.id_field, self.version_field] + self.sync_fields
 
         self.ca_ps_select_all = self.ca_session.prepare(
@@ -59,7 +59,7 @@ class Merger(object):
             "filter": {"match_all": {}}
         }
 
-    def make_es_filter_range(self, a, b):
+    def make_es_filter_version_range(self, a, b):
         return {
             "filter": {
                 "range": {
@@ -112,23 +112,35 @@ class Merger(object):
         except Exception:  # FIXME: catch only specific Cassandra errors
             return 0, len(docs)
 
-    def load_checkpoint(self):
+    def checkpoint_reset(self):
+        """
+        Reset the checkpoint for this worker
+        """
+        self.checkpoint_save(0)
+
+    def checkpoint_load(self):
         """
         Returns the last sync timestamp for this worker
         """
         try:
             with open(self.CHECKPOINT_FILENAME, "r") as f:
-                return int(f.read())
+                checkpoint = int(f.read())
         except IOError:
-            return 0
+            checkpoint = 0
 
-    def save_checkpoint(self, checkpoint):
+        logger.info("Loaded checkpoint %d", checkpoint)
+
+        return checkpoint
+
+    def checkpoint_save(self, checkpoint):
         """
         Save the checkpoint for this worker
         """
         # FIXME: in the real world save to etcd, zookeper or another reliable storage.
         with open(self.CHECKPOINT_FILENAME, "w") as f:
             f.write(str(checkpoint))
+
+        logger.info("Saving checkpoint %d", checkpoint)
 
     def sync(self):
         """
@@ -147,8 +159,8 @@ class Merger(object):
         # TODO: paralyze C* scanning by going through different parts of the ring in different machines/processes
         # TODO: paralyze ES scanning by scanning different ranges of ids in different machines/processes
 
-        last_checkpoint = self.load_checkpoint()
-        next_checkpoint = int(time.time()) - 5  # subtract 5 seconds to avoid any problems with late writes
+        last_checkpoint = self.checkpoint_load()
+        next_checkpoint = int(time.time())
 
         # sync from ES to C*
         docs = []
@@ -157,7 +169,7 @@ class Merger(object):
                                 query=self.make_es_filter_all())
         else:
             es_cursor = es_scan(self.es_session, index=self.es_index, doc_type=self.es_type,
-                                query=self.make_es_filter_range(last_checkpoint, next_checkpoint))
+                                query=self.make_es_filter_version_range(last_checkpoint, next_checkpoint))
         for hit in es_cursor:
             docs.append(hit["_source"])
             if len(docs) >= self.batch_size:
@@ -183,22 +195,22 @@ class Merger(object):
             successful, failed = self.es_bulk_insert_versioned(docs)
             logger.info("Cassandra -> ElasticSearch: %d successful, %d failed or up to date", successful, failed)
 
-        self.save_checkpoint(next_checkpoint)
-        logger.info("Saved checkpoint %s", next_checkpoint)
+        self.checkpoint_save(next_checkpoint)
 
     def sync_incremental(self):
         pass
 
+    def run_once(self):
+        logger.info("Starting sync job")
+        start = time.time()
+        self.sync()
+        end = time.time()
+        took = end - start
+        logger.info("Took %f seconds to sync", took)
+
     def run_forever(self):
         while True:
-            logger.info("Starting sync job")
-            start = time.time()
-
-            self.sync()
-
-            end = time.time()
-            took = end - start
-            logger.info("Took %f seconds to sync", took)
+            self.run_once()
             if self.interval >= 0:
                 logger.info("Resting for %f seconds", self.interval)
                 time.sleep(self.interval)
