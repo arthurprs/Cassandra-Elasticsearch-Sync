@@ -5,7 +5,7 @@ import time
 import yaml
 import os.path
 
-from sync.merger import Merger, es_scan
+from sync.synchronizer import Synchronizer, es_scan
 
 
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
@@ -21,7 +21,7 @@ class BaseTestCase(unittest.TestCase):
     # longMessage = True
 
     def setUp(self):
-        self.merger = Merger(load_config_dict())
+        self.merger = Synchronizer(load_config_dict())
         self.merger.checkpoint_reset()
         self.prepare_ca()
         self.prepare_es()

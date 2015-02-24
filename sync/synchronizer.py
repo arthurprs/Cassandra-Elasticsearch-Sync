@@ -8,10 +8,10 @@ from elasticsearch.helpers import bulk as es_bulk, scan as es_scan
 from cassandra.cluster import Cluster as CaCluster
 from cassandra.query import BatchType, BatchStatement, dict_factory
 
-logger = logging.getLogger("Merger")
+logger = logging.getLogger("synchronizer")
 
 
-class Merger(object):
+class Synchronizer(object):
     CHECKPOINT_FILENAME = "checkpoint.txt"
 
     def __init__(self, config_d):
@@ -144,7 +144,7 @@ class Merger(object):
 
     def sync(self):
         """
-        Executes a full sync between ElasticSearch and Cassandra.
+        Syncs ElasticSearch and Cassandra in both directions.
 
         It uses each database conflict resolution properties to avoid race conditions
         with concurrent writes running during the sync. This is:
