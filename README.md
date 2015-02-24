@@ -120,10 +120,16 @@ Concurrency in this case is achieved by splitting the cluster_shard range among 
 
 ## Running and configuration
 
-To run use the following command:
+Run with the following command:
 ```
-python run.py config.yaml
+./run.py config.yaml ACTION
 ```
+
+Action can be one of:
+
+* **sync_forever**: repeat sync every {config.interval} seconds
+* **sync_once**: sync once and exit
+* **reset**: reset the incremental synchronization checkpoint
 
 A sample config.yaml
 
@@ -149,5 +155,4 @@ elasticsearch:
     - 127.0.0.1
   index: i_data
   type: document
-
 ```
