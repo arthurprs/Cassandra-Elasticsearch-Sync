@@ -1,6 +1,23 @@
 # Cassandra <-> ElasticSearch Synchronization
 
-## The problem
+- [Intro](#intro)
+- [Installing](#installing)
+- [Running](#running)
+	- [Running tests](#running-tests)
+- [Challenges](#challenges)
+	- [Bidirectional Replication](#bidirectional-replication)
+	- [Race conditions](#race-conditions)
+		- [Cassandra](#cassandra)
+		- [Elasticsearch](#elasticsearch)
+	- [Parallelized / Distributed](#parallelized--distributed)
+	- [Fault tolerance](#fault-tolerance)
+	- [Full and Incremental Synchronization](#full-and-incremental-synchronization)
+- [Implementation Details](#implementation-details)
+	- [Full Sync](#full-sync)
+	- [Partial Sync](#partial-sync)
+	- [Better Partial Sync](#better-partial-sync)
+
+# Intro
 
 You have an Elasticsearch and a Cassandra cluster and you have to sync between them. The catch? It's bidirectional!
 Writes can come in any time to Cassandra or Elasticsearch and you want data to be available in both of them after some time.
@@ -8,9 +25,71 @@ All records have a **version** field which will be used to distinguish newer fro
 
 To complicate things a little the toolset is restricted to the two databases and Python scripts, so no Kafka, Hadoop, Spark nor Storm...
 
-## Challenges
+# Installing
 
-### Bidirectional Replication
+The source code is compatible with python 2.7+/3.3+.
+
+The Dependencies are listed in the requirements.txt file.
+
+Use pip to install the dependencies to your interpreter/virtual env.
+
+```
+pip install -r requirements.txt
+```
+
+# Running
+
+Run with the following command:
+
+```
+./run.py config.yaml ACTION
+OR
+python run.py config.yaml ACTION
+```
+
+*ACTION* can be one of:
+
+* **sync_forever**: repeat sync every {config.interval} seconds
+* **sync_once**: sync once and exit
+* **reset**: reset the incremental synchronization checkpoint
+
+A sample config.yaml
+
+```
+interval: 60 # interval in seconds
+id_field: id # name of the id field
+version_field: version # name of the version field
+docs_per_batch: 1000 # number of document per batch insert
+sync_fields: # list of fields that will also be syncronized
+  - "data_int"
+  - "data_float"
+  - "data_str"
+
+cassandra:
+  hosts:
+    - 127.0.0.1
+  keyspace: default_art
+  table: t_data
+  changes_table: c_data
+
+elasticsearch:
+  hosts:
+    - 127.0.0.1
+  index: i_data
+  type: document
+```
+
+## Running tests
+
+To run the test suite
+
+```
+./test.sh
+```
+
+# Challenges
+
+## Bidirectional Replication
 
 The bidirectional replication obliges the sync process to inspect both databases to distinguish the newer record (even the entire dataset if running a full sync).
 
@@ -19,7 +98,7 @@ This immediately excludes the naive approach of pulling all the data from both d
 Why? Both Cassandra as ElasticSearch are distributed and can easily exceed the memory/disk capacity of the worker machine. Even if run a distributed version of the program
 it's still not practical.
 
-### Race conditions
+## Race conditions
 
 Race conditions are a big problem in this case as writes are still going to both ends during the sync process. Any RMW (Read Modify WRITE) will be a problem.
 
@@ -33,19 +112,19 @@ Consider the example:
 
 Each database has it's own mechanism to avoid race conditions:
 
-#### Cassandra
+### Cassandra
 
 * Last Write Wins (LWW) based on the write timestamp
 * Light Weight Transaction (LWT) in the form of CAS
 
-#### Elasticsearch
+### Elasticsearch
 
 * Optimistic concurrency control in the form of version CAS
 
 LWT are relatively expensive in Cassandra, so if you possibly have a timestamp in the record you may use it
 as the write timestamp in Cassandra. The LWW mechanism will make race conditions highly unlikely.
 
-### Parallelized / Distributed
+## Parallelized / Distributed
 
 Prallelization is needed otherwise syncing anything over a gigabyte cluster will take a looonnnggg time.
 It's relatively easy to parallelize a scan procedure on both databases by:
@@ -53,25 +132,25 @@ It's relatively easy to parallelize a scan procedure on both databases by:
 * For Cassandra each worker can scan different parts of the partitioner ring in different machines/processes.
 * For ElasticSearch each worker can scan different ranges of ids in different machines/processes
 
-### Fault tolerance
+## Fault tolerance
 
 If a part of the sync process fails one must be able to resume somewhere but not from the start.
 
-### Full and Incremental Synchronization
+## Full and Incremental Synchronization
 
 Full synchronization is necessary for the first run and from time to time to make sure both databases are in full sync.
 Elasticsearch is known to lose writes after healing partitions for example.
 
 Incremental synchronization is the prefered way to run continuously as it only considers the changes since last sync thus putting less stress on the clusters.
 
-# Implementation
+# Implementation Details
 
-In this implementation I assumed all versions of your record will carry a timestamp along it
+In this implementation I assumed all versions of the record carry a timestamp along it
 (it can be the version field itself or another field as longs as if version increases the timestamp shall increase as well)
 which is reasonable and will make things a lot simpler/faster. ***If it's not the case the only change required is using a
 Cassandra LWT with the version field.***
 
-For the sake of simplicity the implementation is also not distributed.
+*For the sake of simplicity the implementation is also not distributed.*
 
 ## Full Sync
 
@@ -117,42 +196,3 @@ Carefully selecting time_shard and cluster_shard ranges allows a good distributi
 Writing with a short enough TTL avoids the need for deleting older changes.
 
 Concurrency in this case is achieved by splitting the cluster_shard range among the workers.
-
-## Running and configuration
-
-Run with the following command:
-```
-./run.py config.yaml ACTION
-```
-
-Action can be one of:
-
-* **sync_forever**: repeat sync every {config.interval} seconds
-* **sync_once**: sync once and exit
-* **reset**: reset the incremental synchronization checkpoint
-
-A sample config.yaml
-
-```
-interval: 60 # interval in seconds
-id_field: id # name of the id field
-version_field: version # name of the version field
-docs_per_batch: 1000 # number of document per batch insert
-sync_fields: # list of fields that will also be syncronized
-  - "data_int"
-  - "data_float"
-  - "data_str"
-
-cassandra:
-  hosts:
-    - 127.0.0.1
-  keyspace: default_art
-  table: t_data
-  changes_table: c_data
-
-elasticsearch:
-  hosts:
-    - 127.0.0.1
-  index: i_data
-  type: document
-```
