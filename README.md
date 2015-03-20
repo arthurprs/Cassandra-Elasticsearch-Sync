@@ -20,8 +20,8 @@
 # Intro
 
 You have an Elasticsearch and a Cassandra cluster and you have to sync between them. The catch? It's bidirectional!
-Writes can come in any time to Cassandra or Elasticsearch and you want data to be available in both of them after some time.
-All records have a **version** field which will be used to distinguish newer from older records.
+Writes can come at any time to Cassandra or Elasticsearch and eventually you want data to converge and be available in both databases.
+All records have a **version** field which can be used to distinguish newer from older records.
 
 To complicate things a little the toolset is restricted to the two databases and Python scripts, so no Kafka, Hadoop, Spark nor Storm...
 
@@ -95,12 +95,11 @@ The bidirectional replication obliges the sync process to inspect both databases
 
 This immediately excludes the naive approach of pulling all the data from both databases to memory (or disk) to figure out which inserts/update are needed.
 
-Why? Both Cassandra as ElasticSearch are distributed and can easily exceed the memory/disk capacity of the worker machine. Even if run a distributed version of the program
-it's still not practical.
+Why? Both Cassandra and ElasticSearch are distributed and can easily exceed the memory/disk capacity of the worker machine. Even if run a distributed version of the sync program it's still not practical.
 
 ## Race conditions
 
-Race conditions are a big problem in this case as writes are still going to both ends during the sync process. Any RMW (Read Modify WRITE) will be a problem.
+Race conditions are a big problem in this case as writes are still going to both ends during the sync process. Any RMW (Read Modify Write) will be a problem.
 
 Consider the example:
 
@@ -126,7 +125,7 @@ as the write timestamp in Cassandra. The LWW mechanism will make race conditions
 
 ## Parallelized / Distributed
 
-Prallelization is needed otherwise syncing anything over a gigabyte cluster will take a looonnnggg time.
+Prallelization is needed otherwise syncing anything over a multi gigabyte cluster will take a looonnnggg time.
 It's relatively easy to parallelize a scan procedure on both databases by:
 
 * For Cassandra each worker can scan different parts of the partitioner ring in different machines/processes.
@@ -138,7 +137,7 @@ If a part of the sync process fails one must be able to resume somewhere but not
 
 ## Full and Incremental Synchronization
 
-Full synchronization is necessary for the first run and from time to time to make sure both databases are in full sync.
+Full synchronization is necessary for the first run and from time to time to ensure both databases are in full sync.
 Elasticsearch is known to lose writes after healing partitions for example.
 
 Incremental synchronization is the prefered way to run continuously as it only considers the changes since last sync thus putting less stress on the clusters.
@@ -155,27 +154,26 @@ Cassandra LWT with the version field.***
 ## Full Sync
 
 The script runs a full table scan on Cassandra (done cheaply with cassandra 2.0+ pagination) and then send bulk writes to Elasticsearch using the external version flag.
-This way the record will only be inserted if it doesn't exists or it's newer. This is MUCH faster than querying for the
+This way the record will only be inserted if it doesn't exists or it's newer. Conciliating on write like this is MUCH faster than querying for the
 records versions in Elasticsearch and then deciding to insert or not.
 
-Syncing from Elasticsearch to Cassandra is done similarly, the worker issue a match_all filter and then scroll (using the scan type) through all the records, issuing
+Syncing from Elasticsearch to Cassandra similar, the worker issue a match_all filter and then scroll (using the scan type) through all the records, issuing
 batch writes to Cassandra. Each insert in the batch is done with the record timestamp to avoid race conditions (as stated previously LWT would also work, just slower).
 The advantages for conciliating on write are the same as before.
 
 ## Partial Sync
 
-Although trivial in Elasticsearch you can't easily run a range query on non-primary key field in Cassandra
-to get all records with timestamp greater than X, secondary indexes are of no use in this case nor ALLOW FILTERING.
+Although trivial in Elasticsearch you can't easily run a range query on a non-primary key field in Cassandra, so you can't get all records with version/timestamp greater than X. Secondary indexes are of no use in this case nor ALLOW FILTERING.
 
-The current implementation runs a full table scan in Cassandra filtering the records in python (thus very expensive).
+The current implementation runs a full table scan in Cassandra filtering the records in the worker (thus very expensive).
 
 ## Better Partial Sync
 
-An alternative to the previous is when inserting/updating a record, insert it into it's table AND into a changes table.
+We ned an alternative to query changed records in Cassandra. One option is when inserting/updating a record, insert it into it's table AND into a changes table.
 
 Queue like workloads and hotpots are a common pitfall in Cassandra, so this must be done with caution.
 
-But consider the following changes table:
+Consider the following changes table:
 
 ```
 CREATE TABLE t_data_changes (
@@ -192,7 +190,7 @@ CREATE TABLE t_data_changes (
 * **cluster_shard**: distribute the writes from the same time portion to different parts of the cluster. Example: random(0, 4096)
 * **timestamp**: as the name suggests the change timestamp, used to efficiently select changes since last sync checkpoint
 
-Carefully selecting time_shard and cluster_shard ranges allows a good distribution of the load in the cluster.
+Carefully selecting time_shard and cluster_shard ranges allows a good distribution of the load in the cluster avoiding both hotspots and very wide rows.
 Writing with a short enough TTL avoids the need for deleting older changes.
 
 Concurrency in this case is achieved by splitting the cluster_shard range among the workers.
