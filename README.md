@@ -1,3 +1,7 @@
+# DO NOT USE THIS
+
+Although it can work this was just a proof of concept that I wrote for a job interview.
+
 # Cassandra <-> ElasticSearch Synchronization
 
 - [Intro](#intro)
